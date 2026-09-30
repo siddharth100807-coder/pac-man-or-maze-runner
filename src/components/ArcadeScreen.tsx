@@ -1,44 +1,47 @@
 import React, { useEffect, useRef, useCallback } from 'react';
-import { Coin, Difficulty, FloatingNotification, Ghost, Particle, Player, Portal, PowerUp } from '../types/game';
+import { BiomeTheme, Coin, Difficulty, FloatingNotification, Ghost, Particle, Player, Portal, PowerUp } from '../types/game';
 import { getThemePalette } from '../utils/mazeGenerator';
 import { sound } from '../audio/soundEngine';
 
 interface ArcadeScreenProps {
+  levelKey: number;
   grid: number[][];
   rows: number;
   cols: number;
   tileSize: number;
-  theme: any;
+  theme: BiomeTheme;
   difficulty: Difficulty;
-  player: Player;
-  ghosts: Ghost[];
-  coins: Coin[];
-  powerUps: PowerUp[];
-  portal: Portal;
+  playerStart: { x: number; y: number };
+  initialGhosts: Ghost[];
+  initialCoins: Coin[];
+  initialPowerUps: PowerUp[];
+  initialPortal: Portal;
   isPlaying: boolean;
   isPaused: boolean;
   inputDirection: { x: number; y: number };
-  onCoinCollected: (coin: Coin) => void;
+  onCoinCollected: (coin: Coin, remainingCount: number) => void;
   onPowerUpCollected: (pw: PowerUp) => void;
   onPortalReached: () => void;
   onPlayerHit: () => void;
   onCoinsDepleted: () => void;
-  onUpdatePlayerPos: (p: Player) => void;
+  onEffectsUpdated: (effects: Player['activeEffects']) => void;
+  onCoinsCountUpdated: (count: number) => void;
   crtEffect: boolean;
 }
 
 export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
+  levelKey,
   grid,
   rows,
   cols,
   tileSize,
   theme,
   difficulty,
-  player,
-  ghosts,
-  coins,
-  powerUps,
-  portal,
+  playerStart,
+  initialGhosts,
+  initialCoins,
+  initialPowerUps,
+  initialPortal,
   isPlaying,
   isPaused,
   inputDirection,
@@ -47,44 +50,113 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
   onPortalReached,
   onPlayerHit,
   onCoinsDepleted,
-  onUpdatePlayerPos,
+  onEffectsUpdated,
+  onCoinsCountUpdated,
   crtEffect,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // References for continuous animation loop
-  const playerRef = useRef<Player>(player);
-  playerRef.current = player;
-
-  const ghostsRef = useRef<Ghost[]>(ghosts);
-  ghostsRef.current = ghosts;
-
-  const coinsRef = useRef<Coin[]>(coins);
-  coinsRef.current = coins;
-
-  const powerUpsRef = useRef<PowerUp[]>(powerUps);
-  powerUpsRef.current = powerUps;
-
-  const portalRef = useRef<Portal>(portal);
-  portalRef.current = portal;
+  // Stable callbacks container
+  const callbacksRef = useRef({
+    onCoinCollected,
+    onPowerUpCollected,
+    onPortalReached,
+    onPlayerHit,
+    onCoinsDepleted,
+    onEffectsUpdated,
+    onCoinsCountUpdated,
+  });
+  callbacksRef.current = {
+    onCoinCollected,
+    onPowerUpCollected,
+    onPortalReached,
+    onPlayerHit,
+    onCoinsDepleted,
+    onEffectsUpdated,
+    onCoinsCountUpdated,
+  };
 
   const inputRef = useRef<{ x: number; y: number }>(inputDirection);
   inputRef.current = inputDirection;
 
-  // Effects & transient state
+  // Local game state refs
+  const playerRef = useRef<Player>({
+    x: playerStart.x,
+    y: playerStart.y,
+    radius: 9,
+    speed: 2.6,
+    baseSpeed: 2.6,
+    facing: 'RIGHT',
+    moving: false,
+    activeEffects: {
+      speedBoostRemaining: 0,
+      freezeRemaining: 0,
+      hasShield: false,
+      magnetRemaining: 0,
+    },
+  });
+
+  const ghostsRef = useRef<Ghost[]>([]);
+  const coinsRef = useRef<Coin[]>([]);
+  const powerUpsRef = useRef<PowerUp[]>([]);
+  const portalRef = useRef<Portal>({ ...initialPortal });
+
+  // Input buffering for smooth arcade corner turns
+  const bufferedDirectionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Visual effects
   const particlesRef = useRef<Particle[]>([]);
   const floatingTextsRef = useRef<FloatingNotification[]>([]);
   const screenShakeRef = useRef<number>(0);
-  const portalUnlockedAnnouncedRef = useRef<boolean>(false);
   const invulnerableTimerRef = useRef<number>(0);
+  const portalAnnouncedRef = useRef<boolean>(false);
+  const lastEffectsSyncRef = useRef<number>(0);
 
   const canvasWidth = cols * tileSize;
   const canvasHeight = rows * tileSize;
 
-  // Collision detection between circle and grid walls
+  // Initialize level entities on levelKey change
+  useEffect(() => {
+    playerRef.current = {
+      x: playerStart.x,
+      y: playerStart.y,
+      radius: 9,
+      speed: 2.6,
+      baseSpeed: 2.6,
+      facing: 'RIGHT',
+      moving: false,
+      activeEffects: {
+        speedBoostRemaining: 0,
+        freezeRemaining: 0,
+        hasShield: false,
+        magnetRemaining: 0,
+      },
+    };
+
+    ghostsRef.current = initialGhosts.map((g) => ({
+      ...g,
+      x: g.spawnX ?? g.x,
+      y: g.spawnY ?? g.y,
+      dirX: 0,
+      dirY: 0,
+    }));
+
+    coinsRef.current = initialCoins.map((c) => ({ ...c }));
+    powerUpsRef.current = initialPowerUps.map((p) => ({ ...p }));
+    portalRef.current = { ...initialPortal };
+    portalAnnouncedRef.current = false;
+    particlesRef.current = [];
+    floatingTextsRef.current = [];
+    screenShakeRef.current = 0;
+    invulnerableTimerRef.current = 0;
+    bufferedDirectionRef.current = { x: 0, y: 0 };
+
+    callbacksRef.current.onCoinsCountUpdated(initialCoins.length);
+  }, [levelKey, playerStart, initialGhosts, initialCoins, initialPowerUps, initialPortal]);
+
+  // Wall collision check helper
   const checkWallCollision = useCallback(
     (x: number, y: number, radius: number): boolean => {
-      // Check 8 perimeter points on circle bounding circumference
       const numChecks = 8;
       for (let i = 0; i < numChecks; i++) {
         const angle = (i * 2 * Math.PI) / numChecks;
@@ -94,20 +166,19 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         const c = Math.floor(px / tileSize);
         const r = Math.floor(py / tileSize);
 
-        if (r < 0 || r >= rows || c < 0 || c >= cols) {
-          return true;
-        }
-        if (grid[r] && grid[r][c] === 1) {
-          return true;
-        }
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return true;
+        if (grid[r] && grid[r][c] === 1) return true;
       }
       return false;
     },
     [grid, rows, cols, tileSize]
   );
 
-  // Spawn particle helper
+  // Particle helper (with safety max pool of 120)
   const addParticles = (x: number, y: number, color: string, count = 8, speed = 2.5) => {
+    if (particlesRef.current.length > 120) {
+      particlesRef.current.splice(0, count);
+    }
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const velocity = (0.5 + Math.random() * 0.8) * speed;
@@ -119,13 +190,16 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         size: 1.5 + Math.random() * 2.5,
         color,
         life: 0,
-        maxLife: 20 + Math.random() * 15,
+        maxLife: 18 + Math.random() * 12,
       });
     }
   };
 
-  // Add floating message text (+10, +50, etc.)
+  // Floating text helper (with safety max pool of 15)
   const addFloatingText = (x: number, y: number, text: string, color: string) => {
+    if (floatingTextsRef.current.length > 15) {
+      floatingTextsRef.current.shift();
+    }
     floatingTextsRef.current.push({
       id: Math.random().toString(),
       x,
@@ -137,18 +211,13 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
     });
   };
 
-  // Reset portal announcement flag when level reloads
-  useEffect(() => {
-    portalUnlockedAnnouncedRef.current = false;
-  }, [portal.x, portal.y, grid]);
-
-  // Main game update & render loop
+  // MAIN STABLE 60FPS GAME LOOP
   useEffect(() => {
     let animationId: number;
     let lastTime = performance.now();
 
     const loop = (currentTime: number) => {
-      const deltaTime = Math.min(currentTime - lastTime, 50); // Clamp to prevent jumping
+      const deltaTime = Math.min(currentTime - lastTime, 40);
       lastTime = currentTime;
 
       const canvas = canvasRef.current;
@@ -162,28 +231,33 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         return;
       }
 
+      // Crisp pixel rendering without blurring
+      ctx.imageSmoothingEnabled = false;
+
       if (isPlaying && !isPaused) {
         const curPlayer = playerRef.current;
-        const curGhosts = ghostsRef.current;
+        const input = inputRef.current;
         const curCoins = coinsRef.current;
         const curPowerUps = powerUpsRef.current;
+        const curGhosts = ghostsRef.current;
         const curPortal = portalRef.current;
-        const input = inputRef.current;
 
-        // Decrement invulnerability
+        // Decrement invulnerability timer
         if (invulnerableTimerRef.current > 0) {
           invulnerableTimerRef.current -= deltaTime;
         }
 
-        // --- 1. UPDATE PLAYER POWER-UP TIMERS ---
-        const activeEffects = { ...curPlayer.activeEffects };
-        let speedMultiplier = 1.0;
+        // 1. UPDATE POWER-UP TIMERS (FIX 2: GUARANTEED ZERO-EXPIRY EMIT)
+        let effectsActive = false;
+        let expiredThisFrame = false;
 
-        if (activeEffects.speedBoostRemaining > 0) {
-          activeEffects.speedBoostRemaining = Math.max(0, activeEffects.speedBoostRemaining - deltaTime);
-          speedMultiplier = 1.45;
-          // Spawn speed sparks
-          if (Math.random() < 0.3) {
+        if (curPlayer.activeEffects.speedBoostRemaining > 0) {
+          curPlayer.activeEffects.speedBoostRemaining = Math.max(0, curPlayer.activeEffects.speedBoostRemaining - deltaTime);
+          if (curPlayer.activeEffects.speedBoostRemaining === 0) expiredThisFrame = true;
+          else effectsActive = true;
+
+          // Dash trail particles
+          if (Math.random() < 0.25) {
             particlesRef.current.push({
               x: curPlayer.x + (Math.random() - 0.5) * 6,
               y: curPlayer.y + (Math.random() - 0.5) * 6,
@@ -192,145 +266,188 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
               size: 2,
               color: '#f59e0b',
               life: 0,
-              maxLife: 15,
+              maxLife: 12,
             });
           }
         }
 
-        if (activeEffects.freezeRemaining > 0) {
-          activeEffects.freezeRemaining = Math.max(0, activeEffects.freezeRemaining - deltaTime);
+        if (curPlayer.activeEffects.freezeRemaining > 0) {
+          curPlayer.activeEffects.freezeRemaining = Math.max(0, curPlayer.activeEffects.freezeRemaining - deltaTime);
+          if (curPlayer.activeEffects.freezeRemaining === 0) expiredThisFrame = true;
+          else effectsActive = true;
         }
 
-        if (activeEffects.magnetRemaining > 0) {
-          activeEffects.magnetRemaining = Math.max(0, activeEffects.magnetRemaining - deltaTime);
+        if (curPlayer.activeEffects.magnetRemaining > 0) {
+          curPlayer.activeEffects.magnetRemaining = Math.max(0, curPlayer.activeEffects.magnetRemaining - deltaTime);
+          if (curPlayer.activeEffects.magnetRemaining === 0) expiredThisFrame = true;
+          else effectsActive = true;
         }
 
-        // --- 2. UPDATE PLAYER POSITION & CORNER SLIDING ---
+        // Sync with HUD on timer expiry OR every 100ms
+        if (expiredThisFrame || (effectsActive && currentTime - lastEffectsSyncRef.current > 100)) {
+          lastEffectsSyncRef.current = currentTime;
+          callbacksRef.current.onEffectsUpdated({ ...curPlayer.activeEffects });
+        }
+
+        // 2. PLAYER MOVEMENT & CORNER TURNING (FIX 5: PRE-TURN BUFFERING)
+        if (input.x !== 0 || input.y !== 0) {
+          bufferedDirectionRef.current = { x: input.x, y: input.y };
+        }
+
+        const speedMultiplier = curPlayer.activeEffects.speedBoostRemaining > 0 ? 1.45 : 1.0;
         const effectiveSpeed = curPlayer.baseSpeed * speedMultiplier;
-        let dx = input.x * effectiveSpeed;
-        let dy = input.y * effectiveSpeed;
+
+        // Try applying buffered turn if perpendicular
+        let desiredX = input.x;
+        let desiredY = input.y;
+
+        // Attempt pre-turn into open corridor
+        const curTileC = Math.floor(curPlayer.x / tileSize);
+        const curTileR = Math.floor(curPlayer.y / tileSize);
+        const tileCenterX = curTileC * tileSize + tileSize / 2;
+        const tileCenterY = curTileR * tileSize + tileSize / 2;
+
+        if (desiredX !== 0 && desiredY === 0) {
+          // Player wants to move horizontally
+          const diffY = tileCenterY - curPlayer.y;
+          if (Math.abs(diffY) > 1 && Math.abs(diffY) < tileSize * 0.45) {
+            // Check if horizontal passage is open
+            const nextC = curTileC + (desiredX > 0 ? 1 : -1);
+            if (nextC >= 0 && nextC < cols && grid[curTileR] && grid[curTileR][nextC] === 0) {
+              // Nudge vertically toward tile center
+              curPlayer.y += Math.sign(diffY) * Math.min(Math.abs(diffY), 1.5);
+            }
+          }
+        } else if (desiredY !== 0 && desiredX === 0) {
+          // Player wants to move vertically
+          const diffX = tileCenterX - curPlayer.x;
+          if (Math.abs(diffX) > 1 && Math.abs(diffX) < tileSize * 0.45) {
+            const nextR = curTileR + (desiredY > 0 ? 1 : -1);
+            if (nextR >= 0 && nextR < rows && grid[nextR] && grid[nextR][curTileC] === 0) {
+              curPlayer.x += Math.sign(diffX) * Math.min(Math.abs(diffX), 1.5);
+            }
+          }
+        }
+
+        let dx = desiredX * effectiveSpeed;
+        let dy = desiredY * effectiveSpeed;
 
         if (dx !== 0 && dy !== 0) {
-          // Normalize diagonal movement
           dx *= 0.7071;
           dy *= 0.7071;
         }
 
-        let newX = curPlayer.x;
-        let newY = curPlayer.y;
         let moved = false;
 
-        // Smooth X-axis collision & slide
+        // Move X
         if (dx !== 0) {
           if (!checkWallCollision(curPlayer.x + dx, curPlayer.y, curPlayer.radius)) {
-            newX += dx;
+            curPlayer.x += dx;
             moved = true;
           } else {
-            // Attempt smart corner nudging: if slightly offset from tile center, nudge into lane
-            const currentTileY = Math.floor(curPlayer.y / tileSize);
-            const tileCenterY = currentTileY * tileSize + tileSize / 2;
+            // Wall slide nudge along Y
             const diffY = tileCenterY - curPlayer.y;
-            if (Math.abs(diffY) > 1.5 && Math.abs(diffY) < tileSize * 0.35) {
-              const nudge = Math.sign(diffY) * Math.min(Math.abs(diffY), 1.2);
-              if (!checkWallCollision(curPlayer.x + dx * 0.4, curPlayer.y + nudge, curPlayer.radius)) {
-                newY += nudge;
-                newX += dx * 0.6;
+            if (Math.abs(diffY) > 1.2 && Math.abs(diffY) < tileSize * 0.4) {
+              const nudge = Math.sign(diffY) * Math.min(Math.abs(diffY), 1.4);
+              if (!checkWallCollision(curPlayer.x + dx * 0.3, curPlayer.y + nudge, curPlayer.radius)) {
+                curPlayer.y += nudge;
+                curPlayer.x += dx * 0.5;
                 moved = true;
               }
             }
           }
         }
 
-        // Smooth Y-axis collision & slide
+        // Move Y
         if (dy !== 0) {
-          if (!checkWallCollision(newX, curPlayer.y + dy, curPlayer.radius)) {
-            newY += dy;
+          if (!checkWallCollision(curPlayer.x, curPlayer.y + dy, curPlayer.radius)) {
+            curPlayer.y += dy;
             moved = true;
           } else {
-            // Corner nudging in X direction
-            const currentTileX = Math.floor(newX / tileSize);
-            const tileCenterX = currentTileX * tileSize + tileSize / 2;
-            const diffX = tileCenterX - newX;
-            if (Math.abs(diffX) > 1.5 && Math.abs(diffX) < tileSize * 0.35) {
-              const nudge = Math.sign(diffX) * Math.min(Math.abs(diffX), 1.2);
-              if (!checkWallCollision(newX + nudge, curPlayer.y + dy * 0.4, curPlayer.radius)) {
-                newX += nudge;
-                newY += dy * 0.6;
+            // Wall slide nudge along X
+            const diffX = tileCenterX - curPlayer.x;
+            if (Math.abs(diffX) > 1.2 && Math.abs(diffX) < tileSize * 0.4) {
+              const nudge = Math.sign(diffX) * Math.min(Math.abs(diffX), 1.4);
+              if (!checkWallCollision(curPlayer.x + nudge, curPlayer.y + dy * 0.3, curPlayer.radius)) {
+                curPlayer.x += nudge;
+                curPlayer.y += dy * 0.5;
                 moved = true;
               }
             }
           }
         }
 
-        // Determine facing direction
-        let facing = curPlayer.facing;
+        // Update facing direction
         if (Math.abs(dx) > Math.abs(dy)) {
-          if (dx > 0) facing = 'RIGHT';
-          else if (dx < 0) facing = 'LEFT';
+          if (dx > 0) curPlayer.facing = 'RIGHT';
+          else if (dx < 0) curPlayer.facing = 'LEFT';
         } else if (Math.abs(dy) > 0.1) {
-          if (dy > 0) facing = 'DOWN';
-          else if (dy < 0) facing = 'UP';
+          if (dy > 0) curPlayer.facing = 'DOWN';
+          else if (dy < 0) curPlayer.facing = 'UP';
         }
+        curPlayer.moving = moved;
 
-        // Notify state of updated player
-        if (newX !== curPlayer.x || newY !== curPlayer.y || facing !== curPlayer.facing || moved !== curPlayer.moving) {
-          onUpdatePlayerPos({
-            ...curPlayer,
-            x: newX,
-            y: newY,
-            facing,
-            moving: moved,
-            activeEffects,
-          });
-        }
-
-        // --- 3. COIN ATTRACTION & PICKUP ---
-        const isMagnetActive = activeEffects.magnetRemaining > 0;
+        // 3. COINS COLLECTION & MAGNET
+        const isMagnetActive = curPlayer.activeEffects.magnetRemaining > 0;
         const magnetRadius = tileSize * 4;
+        let coinCollectedThisFrame = false;
 
         curCoins.forEach((coin) => {
           if (!coin.collected) {
-            const dist = Math.hypot(newX - coin.x, newY - coin.y);
+            const dist = Math.hypot(curPlayer.x - coin.x, curPlayer.y - coin.y);
 
-            // Magnet pulling
+            // Magnet attraction
             if (isMagnetActive && dist < magnetRadius) {
-              const pullSpeed = 3.5;
-              const angle = Math.atan2(newY - coin.y, newX - coin.x);
+              const pullSpeed = 3.8;
+              const angle = Math.atan2(curPlayer.y - coin.y, curPlayer.x - coin.x);
               coin.x += Math.cos(angle) * pullSpeed;
               coin.y += Math.sin(angle) * pullSpeed;
             }
 
-            // Collection check
+            // Collection
             if (dist < curPlayer.radius + 7) {
               coin.collected = true;
-              onCoinCollected(coin);
+              coinCollectedThisFrame = true;
+              const remaining = curCoins.filter((c) => !c.collected).length;
+              callbacksRef.current.onCoinCollected(coin, remaining);
+              callbacksRef.current.onCoinsCountUpdated(remaining);
               addParticles(coin.x, coin.y, coin.isSuper ? '#00ffcc' : '#ffcc00', coin.isSuper ? 12 : 7);
               addFloatingText(coin.x, coin.y, `+${coin.value}`, coin.isSuper ? '#00ffcc' : '#ffcc00');
             }
           }
         });
 
-        // Check if all coins collected to open exit portal
-        const uncollectedCoinsCount = curCoins.filter((c) => !c.collected).length;
-        if (uncollectedCoinsCount === 0 && !curPortal.active) {
+        // 4. CHECK PORTAL ACTIVATION
+        const uncollectedCoins = curCoins.filter((c) => !c.collected).length;
+        if (uncollectedCoins === 0 && !curPortal.active) {
           curPortal.active = true;
-          if (!portalUnlockedAnnouncedRef.current) {
-            portalUnlockedAnnouncedRef.current = true;
+          if (!portalAnnouncedRef.current) {
+            portalAnnouncedRef.current = true;
             sound.playPortalOpenSound();
             addFloatingText(curPortal.x, curPortal.y - 12, 'PORTAL OPEN!', '#00ffcc');
-            addParticles(curPortal.x, curPortal.y, '#00ffcc', 25, 4);
+            addParticles(curPortal.x, curPortal.y, '#00ffcc', 28, 4);
           }
-          onCoinsDepleted();
+          callbacksRef.current.onCoinsDepleted();
         }
 
-        // --- 4. POWER-UP PICKUP ---
+        // 5. POWER-UP COLLECTION
         curPowerUps.forEach((pw) => {
           if (!pw.collected) {
-            const dist = Math.hypot(newX - pw.x, newY - pw.y);
+            const dist = Math.hypot(curPlayer.x - pw.x, curPlayer.y - pw.y);
             if (dist < curPlayer.radius + 8) {
               pw.collected = true;
-              onPowerUpCollected(pw);
+              if (pw.type === 'SPEED') curPlayer.activeEffects.speedBoostRemaining = 6000;
+              if (pw.type === 'FREEZE') {
+                curPlayer.activeEffects.freezeRemaining = 5000;
+                sound.playFreezeSound();
+              }
+              if (pw.type === 'SHIELD') curPlayer.activeEffects.hasShield = true;
+              if (pw.type === 'MAGNET') curPlayer.activeEffects.magnetRemaining = 7000;
+
+              callbacksRef.current.onEffectsUpdated({ ...curPlayer.activeEffects });
+              callbacksRef.current.onPowerUpCollected(pw);
               sound.playPowerUpSound();
+
               const colors: Record<string, string> = {
                 SPEED: '#f59e0b',
                 FREEZE: '#38bdf8',
@@ -344,18 +461,18 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           }
         });
 
-        // --- 5. PORTAL VICTORY CHECK ---
+        // 6. PORTAL REACHED (LEVEL CLEAR)
         if (curPortal.active) {
-          const distToPortal = Math.hypot(newX - curPortal.x, newY - curPortal.y);
+          const distToPortal = Math.hypot(curPlayer.x - curPortal.x, curPlayer.y - curPortal.y);
           if (distToPortal < curPlayer.radius + 10) {
             sound.playLevelClearSound();
             addParticles(curPortal.x, curPortal.y, '#00ffcc', 35, 5);
-            onPortalReached();
+            callbacksRef.current.onPortalReached();
           }
         }
 
-        // --- 6. GHOST AI MOVEMENT & PLAYER ENCOUNTERS ---
-        const isFrozen = activeEffects.freezeRemaining > 0;
+        // 7. GHOST AI & CORRIDOR NAVIGATION (FIX 4: ACCURATE TILE-CROSSING DETECTION)
+        const isFrozen = curPlayer.activeEffects.freezeRemaining > 0;
 
         curGhosts.forEach((ghost) => {
           if (isFrozen) {
@@ -364,19 +481,16 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           }
           ghost.isFrozen = false;
 
-          // Ghost AI Target computation
-          let targetX = newX;
-          let targetY = newY;
+          let targetX = curPlayer.x;
+          let targetY = curPlayer.y;
 
           if (ghost.type === 'AMBUSHER') {
-            // Predict ahead of player direction
             const lookAhead = tileSize * 3;
             if (curPlayer.facing === 'UP') targetY -= lookAhead;
             else if (curPlayer.facing === 'DOWN') targetY += lookAhead;
             else if (curPlayer.facing === 'LEFT') targetX -= lookAhead;
             else if (curPlayer.facing === 'RIGHT') targetX += lookAhead;
           } else if (ghost.type === 'PATROLLER') {
-            // Roams between corners based on time
             const t = Math.floor(currentTime / 4000) % 4;
             if (t === 0) {
               targetX = tileSize * 1.5;
@@ -393,64 +507,136 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
             }
           }
 
-          // Steer towards target with collision sliding
-          const edx = targetX - ghost.x;
-          const edy = targetY - ghost.y;
-          const dist = Math.hypot(edx, edy);
+          const gTileC = Math.floor(ghost.x / tileSize);
+          const gTileR = Math.floor(ghost.y / tileSize);
+          const gCenterX = gTileC * tileSize + tileSize / 2;
+          const gCenterY = gTileR * tileSize + tileSize / 2;
 
-          if (dist > 1) {
-            const stepX = (edx / dist) * ghost.speed;
-            const stepY = (edy / dist) * ghost.speed;
+          // Check if ghost is at center of tile or has no direction
+          const curDirX = ghost.dirX || 0;
+          const curDirY = ghost.dirY || 0;
 
-            // Try X step
-            if (!checkWallCollision(ghost.x + stepX, ghost.y, ghost.radius)) {
-              ghost.x += stepX;
+          const distToCenterX = Math.abs(ghost.x - gCenterX);
+          const distToCenterY = Math.abs(ghost.y - gCenterY);
+
+          // We trigger decision when within 2px of center along axis of movement or stopped
+          const reachedIntersection =
+            (curDirX === 0 && curDirY === 0) ||
+            (curDirX !== 0 && distToCenterX <= Math.max(ghost.speed, 2.0)) ||
+            (curDirY !== 0 && distToCenterY <= Math.max(ghost.speed, 2.0));
+
+          if (reachedIntersection) {
+            // Snap to lane axis to prevent drifting
+            if (curDirX !== 0) ghost.y = gCenterY;
+            if (curDirY !== 0) ghost.x = gCenterX;
+
+            // Evaluate valid corridor directions
+            const directions = [
+              { dx: 0, dy: -1 }, // UP
+              { dx: 0, dy: 1 },  // DOWN
+              { dx: -1, dy: 0 }, // LEFT
+              { dx: 1, dy: 0 },  // RIGHT
+            ];
+
+            const validChoices: { dx: number; dy: number; score: number }[] = [];
+
+            for (const d of directions) {
+              const nextC = gTileC + d.dx;
+              const nextR = gTileR + d.dy;
+
+              if (nextR >= 0 && nextR < rows && nextC >= 0 && nextC < cols && grid[nextR][nextC] === 0) {
+                const isReverse = curDirX !== 0 && d.dx === -curDirX || curDirY !== 0 && d.dy === -curDirY;
+                const nextTileCenterX = nextC * tileSize + tileSize / 2;
+                const nextTileCenterY = nextR * tileSize + tileSize / 2;
+                const distToTarget = Math.hypot(nextTileCenterX - targetX, nextTileCenterY - targetY);
+
+                let score = distToTarget;
+                if (isReverse) score += 1000; // Prefer continuing forward or turning over turning back
+                if (ghost.type === 'WANDERER') score += Math.random() * 250;
+
+                validChoices.push({ dx: d.dx, dy: d.dy, score });
+              }
             }
-            // Try Y step
-            if (!checkWallCollision(ghost.x, ghost.y + stepY, ghost.radius)) {
-              ghost.y += stepY;
-            }
 
-            // Eye direction
-            ghost.eyeOffset = {
-              x: Math.max(-2, Math.min(2, edx / (dist || 1) * 2)),
-              y: Math.max(-2, Math.min(2, edy / (dist || 1) * 2)),
-            };
+            if (validChoices.length > 0) {
+              validChoices.sort((a, b) => a.score - b.score);
+              ghost.dirX = validChoices[0].dx;
+              ghost.dirY = validChoices[0].dy;
+            }
           }
 
-          // Check collision with player
-          const ghostPlayerDist = Math.hypot(newX - ghost.x, newY - ghost.y);
-          if (ghostPlayerDist < curPlayer.radius + ghost.radius - 2) {
+          // Move along chosen direction
+          const nextGx = ghost.x + (ghost.dirX || 0) * ghost.speed;
+          const nextGy = ghost.y + (ghost.dirY || 0) * ghost.speed;
+
+          if (!checkWallCollision(nextGx, nextGy, ghost.radius)) {
+            ghost.x = nextGx;
+            ghost.y = nextGy;
+          } else {
+            // If collision hit, snap to tile center and reset direction
+            ghost.x = gCenterX;
+            ghost.y = gCenterY;
+            ghost.dirX = 0;
+            ghost.dirY = 0;
+          }
+
+          // Eye offset
+          const edx = curPlayer.x - ghost.x;
+          const edy = curPlayer.y - ghost.y;
+          const edist = Math.hypot(edx, edy) || 1;
+          ghost.eyeOffset = {
+            x: Math.max(-2, Math.min(2, (edx / edist) * 2)),
+            y: Math.max(-2, Math.min(2, (edy / edist) * 2)),
+          };
+
+          // Check collision with player (FIX 10: CLEAN RESPAWN)
+          const ghostDist = Math.hypot(curPlayer.x - ghost.x, curPlayer.y - ghost.y);
+          if (ghostDist < curPlayer.radius + ghost.radius - 2) {
             if (invulnerableTimerRef.current <= 0) {
-              if (activeEffects.hasShield) {
-                // Shield absorbs hit!
-                activeEffects.hasShield = false;
+              if (curPlayer.activeEffects.hasShield) {
+                // Shield pops
+                curPlayer.activeEffects.hasShield = false;
                 invulnerableTimerRef.current = 1000;
+                callbacksRef.current.onEffectsUpdated({ ...curPlayer.activeEffects });
                 sound.playShieldPopSound();
                 screenShakeRef.current = 6;
                 addParticles(curPlayer.x, curPlayer.y, '#3b82f6', 20, 4);
                 addFloatingText(curPlayer.x, curPlayer.y - 10, 'SHIELD SAVED!', '#38bdf8');
-                // Push ghost back
-                ghost.x += (ghost.x - newX) * 2;
-                ghost.y += (ghost.y - newY) * 2;
+                // Knock ghost back
+                ghost.x = ghost.spawnX ?? gCenterX;
+                ghost.y = ghost.spawnY ?? gCenterY;
+                ghost.dirX = 0;
+                ghost.dirY = 0;
               } else {
-                // Player lost life!
-                invulnerableTimerRef.current = 1500;
+                // Life lost: safely respawn player & reset all ghosts
+                invulnerableTimerRef.current = 1800;
                 screenShakeRef.current = 14;
                 sound.playHitSound();
                 addParticles(curPlayer.x, curPlayer.y, '#ef4444', 25, 4.5);
                 addFloatingText(curPlayer.x, curPlayer.y - 10, '-1 LIFE', '#ef4444');
-                onPlayerHit();
+
+                curPlayer.x = playerStart.x;
+                curPlayer.y = playerStart.y;
+                curPlayer.activeEffects.speedBoostRemaining = 0;
+
+                curGhosts.forEach((g) => {
+                  g.x = g.spawnX ?? (cols - 2) * tileSize;
+                  g.y = g.spawnY ?? (rows - 2) * tileSize;
+                  g.dirX = 0;
+                  g.dirY = 0;
+                });
+
+                callbacksRef.current.onEffectsUpdated({ ...curPlayer.activeEffects });
+                callbacksRef.current.onPlayerHit();
               }
             }
           }
         });
       }
 
-      // --- 7. RENDER SCREEN ---
+      // 8. RENDER SCREEN
       ctx.save();
 
-      // Screen Shake
       if (screenShakeRef.current > 0) {
         const shakeX = (Math.random() - 0.5) * screenShakeRef.current;
         const shakeY = (Math.random() - 0.5) * screenShakeRef.current;
@@ -462,7 +648,7 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
 
       const palette = getThemePalette(theme);
 
-      // Draw Grid & Walls
+      // Draw Grid Walls & Floors
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const isWall = grid[r][c] === 1;
@@ -477,14 +663,12 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
             ctx.lineWidth = 1.5;
             ctx.strokeRect(x + 0.5, y + 0.5, tileSize - 1, tileSize - 1);
 
-            // Subtle inner pixel brick bevel
             ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
             ctx.fillRect(x + 2, y + 2, tileSize - 4, 2);
           } else {
             ctx.fillStyle = palette.floorFill;
             ctx.fillRect(x, y, tileSize, tileSize);
 
-            // Subtle floor grid dots
             ctx.fillStyle = palette.gridLine;
             ctx.fillRect(x + tileSize / 2 - 1, y + tileSize / 2 - 1, 2, 2);
           }
@@ -507,7 +691,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           ctx.arc(coin.x, coin.y + bounce, coin.isSuper ? 6.5 : 4.5, 0, Math.PI * 2);
           ctx.fill();
 
-          // Shiny highlight center
           ctx.fillStyle = '#ffffff';
           ctx.beginPath();
           ctx.arc(coin.x - 1.5, coin.y + bounce - 1.5, coin.isSuper ? 2 : 1.2, 0, Math.PI * 2);
@@ -554,7 +737,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           ctx.lineWidth = 1.5;
           ctx.stroke();
 
-          // Icon text inside badge
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
@@ -568,12 +750,10 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
       const curPortal = portalRef.current;
       ctx.save();
       if (curPortal.active) {
-        // Glowing active vortex
         const portalAngle = time * 2;
         ctx.shadowColor = '#00ffcc';
         ctx.shadowBlur = 18;
 
-        // Outer pulsing ring
         const pulse = 14 + Math.sin(time * 4) * 2.5;
         ctx.strokeStyle = '#00ffcc';
         ctx.lineWidth = 2.5;
@@ -581,13 +761,11 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.arc(curPortal.x, curPortal.y, pulse, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Inner vortex
         ctx.fillStyle = '#10b981';
         ctx.beginPath();
         ctx.arc(curPortal.x, curPortal.y, 8, 0, Math.PI * 2);
         ctx.fill();
 
-        // Swirling rays
         ctx.strokeStyle = '#e0f2fe';
         ctx.lineWidth = 1.5;
         for (let i = 0; i < 4; i++) {
@@ -598,7 +776,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           ctx.stroke();
         }
       } else {
-        // Inactive locked gate
         ctx.fillStyle = '#1e293b';
         ctx.beginPath();
         ctx.arc(curPortal.x, curPortal.y, 10, 0, Math.PI * 2);
@@ -607,7 +784,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Lock icon
         ctx.fillStyle = '#94a3b8';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
@@ -629,11 +805,9 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.shadowColor = bodyColor;
         ctx.shadowBlur = isGhostFrozen ? 8 : 12;
 
-        // Ghost dome head
         ctx.fillStyle = bodyColor;
         ctx.beginPath();
         ctx.arc(0, -2, ghost.radius, Math.PI, 0, false);
-        // Ghost tentacle skirt
         ctx.lineTo(ghost.radius, ghost.radius - 2 + skirtWiggle);
         ctx.lineTo(ghost.radius / 2, ghost.radius - 5 - skirtWiggle);
         ctx.lineTo(0, ghost.radius - 2 + skirtWiggle);
@@ -642,19 +816,15 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.closePath();
         ctx.fill();
 
-        // Eyes
         ctx.shadowBlur = 0;
         ctx.fillStyle = '#ffffff';
-        // Left Eye
         ctx.beginPath();
         ctx.arc(-3.5 + ghost.eyeOffset.x * 0.5, -3 + ghost.eyeOffset.y * 0.5, 2.5, 0, Math.PI * 2);
         ctx.fill();
-        // Right Eye
         ctx.beginPath();
         ctx.arc(3.5 + ghost.eyeOffset.x * 0.5, -3 + ghost.eyeOffset.y * 0.5, 2.5, 0, Math.PI * 2);
         ctx.fill();
 
-        // Pupils
         ctx.fillStyle = isGhostFrozen ? '#0284c7' : '#0f172a';
         ctx.beginPath();
         ctx.arc(-3.5 + ghost.eyeOffset.x, -3 + ghost.eyeOffset.y, 1.3, 0, Math.PI * 2);
@@ -662,7 +832,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.fill();
 
         if (isGhostFrozen) {
-          // Frost snowflake symbol on ghost
           ctx.fillStyle = '#e0f2fe';
           ctx.font = '8px sans-serif';
           ctx.textAlign = 'center';
@@ -675,7 +844,7 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
       // Draw Player
       const curPlayer = playerRef.current;
       const isInvulnerable = invulnerableTimerRef.current > 0;
-      const isFlickering = isInvulnerable && Math.floor(currentTime / 100) % 2 === 0;
+      const isFlickering = isInvulnerable && Math.floor(currentTime / 90) % 2 === 0;
 
       if (!isFlickering) {
         ctx.save();
@@ -696,7 +865,7 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
           ctx.restore();
         }
 
-        // Player Body (Retro Cyber Runner / Neon Orb with Visor)
+        // Player Neon Orb
         ctx.shadowColor = '#00ffcc';
         ctx.shadowBlur = 10;
         ctx.fillStyle = '#00ffcc';
@@ -704,10 +873,9 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.arc(0, 0, curPlayer.radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Player Visor facing direction
+        // Visor
         ctx.fillStyle = '#0b0c10';
-        let vx = 0,
-          vy = 0;
+        let vx = 0, vy = 0;
         if (curPlayer.facing === 'RIGHT') vx = 3.5;
         else if (curPlayer.facing === 'LEFT') vx = -3.5;
         else if (curPlayer.facing === 'UP') vy = -3.5;
@@ -717,7 +885,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.arc(vx, vy, 3.2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Visor core shine
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(vx + 0.8, vy - 0.8, 1.2, 0, Math.PI * 2);
@@ -727,7 +894,7 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
       }
 
       // Draw Particles
-      particlesRef.current.forEach((p, idx) => {
+      particlesRef.current.forEach((p) => {
         p.x += p.vx;
         p.y += p.vy;
         p.life++;
@@ -743,7 +910,6 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
         ctx.fill();
         ctx.restore();
       });
-      // Filter out dead particles
       particlesRef.current = particlesRef.current.filter((p) => p.life < p.maxLife);
 
       // Draw Floating Notifications
@@ -775,6 +941,7 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
       cancelAnimationFrame(animationId);
     };
   }, [
+    levelKey,
     isPlaying,
     isPaused,
     grid,
@@ -784,26 +951,19 @@ export const ArcadeScreen: React.FC<ArcadeScreenProps> = ({
     theme,
     difficulty,
     checkWallCollision,
-    onCoinCollected,
-    onPowerUpCollected,
-    onPortalReached,
-    onPlayerHit,
-    onCoinsDepleted,
-    onUpdatePlayerPos,
   ]);
 
   return (
     <div
-      className={`relative rounded-lg arcade-bezel bg-[#0a0a0e] overflow-hidden ${
+      className={`relative rounded-lg arcade-bezel bg-[#0a0a0e] overflow-hidden w-full max-w-[476px] aspect-square mx-auto ${
         crtEffect ? 'crt-scanlines crt-vignette' : ''
       }`}
-      style={{ width: canvasWidth, height: canvasHeight, maxWidth: '100%' }}
     >
       <canvas
         ref={canvasRef}
         width={canvasWidth}
         height={canvasHeight}
-        className="block mx-auto cursor-crosshair touch-none"
+        className="w-full h-full block cursor-crosshair touch-none select-none"
       />
     </div>
   );

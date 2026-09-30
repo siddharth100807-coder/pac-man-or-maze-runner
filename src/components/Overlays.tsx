@@ -14,6 +14,7 @@ interface OverlaysProps {
   onResumeGame: () => void;
   onNextLevel: () => void;
   onRestartGame: () => void;
+  onRetryLevel: () => void;
   onChangeDifficulty: (diff: Difficulty) => void;
 }
 
@@ -28,12 +29,13 @@ export const Overlays: React.FC<OverlaysProps> = ({
   onResumeGame,
   onNextLevel,
   onRestartGame,
+  onRetryLevel,
   onChangeDifficulty,
 }) => {
   if (gameState === 'PLAYING') return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-[#0a0a0ec7] backdrop-blur-[2px] select-none">
+    <div className="absolute inset-0 z-30 flex items-center justify-center p-3 bg-[#0a0a0ed9] backdrop-blur-[2px] select-none rounded-lg">
       {/* 1. START / TITLE SCREEN */}
       {gameState === 'START' && (
         <div className="w-full max-w-[420px] bg-[#14151e] border-4 border-[#2d3148] p-5 rounded-xl shadow-2xl text-center flex flex-col items-center gap-4">
@@ -59,7 +61,7 @@ export const Overlays: React.FC<OverlaysProps> = ({
                     sound.playButtonBeep();
                     onChangeDifficulty(d);
                   }}
-                  className={`px-3 py-1.5 text-[9px] font-pixel rounded-md transition-all whitespace-nowrap ${
+                  className={`px-3 py-1.5 text-[9px] font-pixel rounded-md transition-all whitespace-nowrap cursor-pointer ${
                     difficulty === d
                       ? 'bg-[#00ffcc] text-[#0a0a0e] shadow-md font-bold'
                       : 'text-slate-400 hover:text-white'
@@ -105,7 +107,7 @@ export const Overlays: React.FC<OverlaysProps> = ({
               sound.playButtonBeep();
               onStartGame();
             }}
-            className="w-full py-3.5 px-6 rounded-lg bg-[#00ffcc] hover:bg-[#33ffdd] active:translate-y-1 text-[#0a0a0e] font-pixel text-xs tracking-wider font-bold shadow-[0_4px_0_#009977] active:shadow-none transition-all flex items-center justify-center gap-2"
+            className="w-full py-3.5 px-6 rounded-lg bg-[#00ffcc] hover:bg-[#33ffdd] active:translate-y-1 text-[#0a0a0e] font-pixel text-xs tracking-wider font-bold shadow-[0_4px_0_#009977] active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer"
           >
             <Play size={16} fill="currentColor" />
             <span>PLAY GAME</span>
@@ -115,10 +117,10 @@ export const Overlays: React.FC<OverlaysProps> = ({
 
       {/* 2. PAUSED OVERLAY */}
       {gameState === 'PAUSED' && (
-        <div className="w-full max-w-[340px] bg-[#14151e] border-4 border-[#3a3f5c] p-6 rounded-xl shadow-2xl text-center flex flex-col items-center gap-4">
+        <div className="w-full max-w-[340px] bg-[#14151e] border-4 border-[#3a3f5c] p-5 rounded-xl shadow-2xl text-center flex flex-col items-center gap-3">
           <h2 className="text-lg font-pixel text-[#00ffcc] glow-cyan">GAME PAUSED</h2>
 
-          <div className="w-full space-y-2 text-xs font-pixel">
+          <div className="w-full space-y-1.5 text-xs font-pixel">
             <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
               <span>LEVEL</span>
               <span className="text-white">{level}</span>
@@ -135,7 +137,7 @@ export const Overlays: React.FC<OverlaysProps> = ({
                 sound.playButtonBeep();
                 onResumeGame();
               }}
-              className="w-full py-3 px-4 rounded-lg bg-[#00ffcc] hover:bg-[#33ffdd] text-[#0a0a0e] font-pixel text-[11px] font-bold shadow-[0_4px_0_#009977] active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center gap-2"
+              className="w-full py-3 px-4 rounded-lg bg-[#00ffcc] hover:bg-[#33ffdd] text-[#0a0a0e] font-pixel text-[11px] font-bold shadow-[0_4px_0_#009977] active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <Play size={14} fill="currentColor" />
               <span>RESUME</span>
@@ -144,12 +146,22 @@ export const Overlays: React.FC<OverlaysProps> = ({
             <button
               onClick={() => {
                 sound.playButtonBeep();
-                onRestartGame();
+                onRetryLevel();
               }}
-              className="w-full py-2.5 px-4 rounded-lg bg-[#242838] hover:bg-[#32374e] text-slate-200 font-pixel text-[10px] border border-slate-700 transition-all flex items-center justify-center gap-2"
+              className="w-full py-2.5 px-4 rounded-lg bg-[#242838] hover:bg-[#32374e] text-slate-200 font-pixel text-[10px] border border-slate-700 transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <RotateCcw size={14} />
-              <span>RESTART RUN</span>
+              <span>RETRY LEVEL</span>
+            </button>
+
+            <button
+              onClick={() => {
+                sound.playButtonBeep();
+                onRestartGame();
+              }}
+              className="w-full py-2 px-4 rounded-lg bg-transparent hover:bg-slate-800/60 text-slate-400 hover:text-white font-pixel text-[9px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>NEW GAME (LEVEL 1)</span>
             </button>
           </div>
         </div>

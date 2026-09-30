@@ -94,13 +94,21 @@ export function generateLevel(level: number, difficulty: Difficulty): GeneratedL
         if (grid[r][c - 1] === 0) openNeighbors++;
         if (grid[r][c + 1] === 0) openNeighbors++;
 
-        // If dead end (only 1 open neighbor), 35% chance to break a wall to create loop
-        if (openNeighbors === 1 && Math.random() < 0.35) {
+        // If dead end (only 1 open neighbor), 30% chance to break a wall connecting to another passage
+        if (openNeighbors === 1 && Math.random() < 0.30) {
           const candidates: { r: number; c: number }[] = [];
-          if (inBounds(r - 1, c) && grid[r - 1][c] === 1) candidates.push({ r: r - 1, c });
-          if (inBounds(r + 1, c) && grid[r + 1][c] === 1) candidates.push({ r: r + 1, c });
-          if (inBounds(r, c - 1) && grid[r][c - 1] === 1) candidates.push({ r, c: c - 1 });
-          if (inBounds(r, c + 1) && grid[r][c + 1] === 1) candidates.push({ r, c: c + 1 });
+          if (inBounds(r - 2, c) && grid[r - 1][c] === 1 && grid[r - 2][c] === 0) {
+            candidates.push({ r: r - 1, c });
+          }
+          if (inBounds(r + 2, c) && grid[r + 1][c] === 1 && grid[r + 2][c] === 0) {
+            candidates.push({ r: r + 1, c });
+          }
+          if (inBounds(r, c - 2) && grid[r][c - 1] === 1 && grid[r][c - 2] === 0) {
+            candidates.push({ r, c: c - 1 });
+          }
+          if (inBounds(r, c + 2) && grid[r][c + 1] === 1 && grid[r][c + 2] === 0) {
+            candidates.push({ r, c: c + 1 });
+          }
 
           if (candidates.length > 0) {
             const pick = candidates[Math.floor(Math.random() * candidates.length)];
@@ -247,6 +255,10 @@ export function generateLevel(level: number, difficulty: Difficulty): GeneratedL
       isFrozen: false,
       freezeTimer: 0,
       eyeOffset: { x: 0, y: 0 },
+      spawnX: spawnC * tileSize + tileSize / 2,
+      spawnY: spawnR * tileSize + tileSize / 2,
+      dirX: 0,
+      dirY: 0,
     });
   }
 

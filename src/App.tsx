@@ -1,15 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  BiomeTheme,
-  Coin,
   Difficulty,
   GameState,
-  Ghost,
   LevelClearStats,
-  MazeConfig,
   Player,
-  Portal,
-  PowerUp,
   RunStats,
 } from './types/game';
 import { generateLevel } from './utils/mazeGenerator';
@@ -20,7 +14,7 @@ import { Overlays } from './components/Overlays';
 import { VirtualControls } from './components/VirtualControls';
 import { HelpModal } from './components/HelpModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
-import { Gamepad2, Trophy, HelpCircle, Volume2, VolumeX, Tv } from 'lucide-react';
+import { Gamepad2 } from 'lucide-react';
 
 const HIGH_SCORE_KEY = 'retro_maze_runner_high_score';
 const RECORDS_KEY = 'retro_maze_runner_records';
@@ -33,34 +27,27 @@ export default function App() {
   const [score, setScore] = useState<number>(0);
   const [highScore, setHighScore] = useState<number>(0);
   const [level, setLevel] = useState<number>(1);
+  const [levelKey, setLevelKey] = useState<number>(1);
   const [lives, setLives] = useState<number>(3);
   const maxLives = 3;
 
-  // Level Entities & Config
+  // Level configuration & objectives
   const [levelData, setLevelData] = useState(() => generateLevel(1, 'ARCADE'));
-  const [player, setPlayer] = useState<Player>({
-    x: 42,
-    y: 42,
-    radius: 9,
-    speed: 2.6,
-    baseSpeed: 2.6,
-    facing: 'RIGHT',
-    moving: false,
-    activeEffects: {
-      speedBoostRemaining: 0,
-      freezeRemaining: 0,
-      hasShield: false,
-      magnetRemaining: 0,
-    },
-  });
-  const [ghosts, setGhosts] = useState<Ghost[]>(levelData.ghosts);
-  const [coins, setCoins] = useState<Coin[]>(levelData.coins);
-  const [powerUps, setPowerUps] = useState<PowerUp[]>(levelData.powerUps);
-  const [portal, setPortal] = useState<Portal>(levelData.portal);
+  const [coinsRemaining, setCoinsRemaining] = useState<number>(() => levelData.coins.length);
+  const [portalActive, setPortalActive] = useState<boolean>(false);
 
-  // Settings & UI state
+  // Active power-up effects for HUD display
+  const [activeEffects, setActiveEffects] = useState<Player['activeEffects']>({
+    speedBoostRemaining: 0,
+    freezeRemaining: 0,
+    hasShield: false,
+    magnetRemaining: 0,
+  });
+
+  // Settings & modal states
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [crtEffect, setCrtEffect] = useState<boolean>(true);
+  const [showVirtualControls, setShowVirtualControls] = useState<boolean>(false);
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
   const [records, setRecords] = useState<RunStats[]>([]);
@@ -72,11 +59,26 @@ export default function App() {
   const levelStartTimeRef = useRef<number>(Date.now());
   const initialCoinsCountRef = useRef<number>(levelData.coins.length);
 
-  // Touch device detection
-  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
-
+  // Detect touch device on mount
   useEffect(() => {
-    setIsTouchDevice('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+      setShowVirtualControls(true);
+    }
+  }, []);
+
+  // Unlock Web Audio API on first user gesture
+  useEffect(() => {
+    const unlockAudio = () => {
+      sound.enableAudioOnGesture();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio, { passive: true });
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
   }, []);
 
   // Load saved high scores & settings on startup
@@ -96,6 +98,7 @@ export default function App() {
           sound.setMuted(!parsed.soundEnabled);
         }
         if (parsed.crtEffect !== undefined) setCrtEffect(parsed.crtEffect);
+        if (parsed.showVirtualControls !== undefined) setShowVirtualControls(parsed.showVirtualControls);
       }
     } catch {
       // LocalStorage access errors ignored gracefully
@@ -117,14 +120,15 @@ export default function App() {
         date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
       };
 
-      const updated = [newRecord, ...records]
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 15);
-
-      setRecords(updated);
-      try {
-        localStorage.setItem(RECORDS_KEY, JSON.stringify(updated));
-      } catch {}
+      setRecords((prev) => {
+        const updated = [newRecord, ...prev]
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 15);
+        try {
+          localStorage.setItem(RECORDS_KEY, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
 
       if (finalScore > highScore) {
         setHighScore(finalScore);
@@ -133,146 +137,165 @@ export default function App() {
         } catch {}
       }
     },
-    [difficulty, highScore, records]
+    [difficulty, highScore]
   );
 
-  // Update sound engine muted state
-  const handleToggleSound = () => {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    sound.setMuted(!next);
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ soundEnabled: next, crtEffect }));
-    } catch {}
-  };
+  // Toggle sound
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      sound.setMuted(!next);
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ soundEnabled: next, crtEffect, showVirtualControls }));
+      } catch {}
+      return next;
+    });
+  }, [crtEffect, showVirtualControls]);
 
-  // Toggle CRT scanline effect
-  const handleToggleCRT = () => {
-    const next = !crtEffect;
-    setCrtEffect(next);
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ soundEnabled, crtEffect: next }));
-    } catch {}
-  };
+  // Toggle CRT effect
+  const handleToggleCRT = useCallback(() => {
+    setCrtEffect((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ soundEnabled, crtEffect: next, showVirtualControls }));
+      } catch {}
+      return next;
+    });
+  }, [soundEnabled, showVirtualControls]);
 
-  // Start new run from scratch
-  const handleStartGame = () => {
+  // Toggle Virtual Controls
+  const handleToggleVirtualControls = useCallback(() => {
+    setShowVirtualControls((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ soundEnabled, crtEffect, showVirtualControls: next }));
+      } catch {}
+      return next;
+    });
+  }, [soundEnabled, crtEffect]);
+
+  // Start fresh run (Level 1)
+  const handleStartGame = useCallback(() => {
     sound.enableAudioOnGesture();
     const newLvl = generateLevel(1, difficulty);
     setLevelData(newLvl);
     setScore(0);
     setLevel(1);
+    setLevelKey((k) => k + 1);
     setLives(3);
-    setGhosts(newLvl.ghosts);
-    setCoins(newLvl.coins);
-    setPowerUps(newLvl.powerUps);
-    setPortal(newLvl.portal);
-    setPlayer({
-      x: newLvl.playerStart.x,
-      y: newLvl.playerStart.y,
-      radius: 9,
-      speed: 2.6,
-      baseSpeed: 2.6,
-      facing: 'RIGHT',
-      moving: false,
-      activeEffects: {
-        speedBoostRemaining: 0,
-        freezeRemaining: 0,
-        hasShield: false,
-        magnetRemaining: 0,
-      },
+    setPortalActive(false);
+    setCoinsRemaining(newLvl.coins.length);
+    setActiveEffects({
+      speedBoostRemaining: 0,
+      freezeRemaining: 0,
+      hasShield: false,
+      magnetRemaining: 0,
     });
+    setInputDirection({ x: 0, y: 0 });
+    activeKeysRef.current = {};
     initialCoinsCountRef.current = newLvl.coins.length;
     levelStartTimeRef.current = Date.now();
     setLevelStats(null);
     setGameState('PLAYING');
-  };
+  }, [difficulty]);
 
   // Advance to next level
-  const handleNextLevel = () => {
+  const handleNextLevel = useCallback(() => {
     sound.enableAudioOnGesture();
     const nextLvlNum = level + 1;
     const newLvl = generateLevel(nextLvlNum, difficulty);
     setLevelData(newLvl);
     setLevel(nextLvlNum);
-    setGhosts(newLvl.ghosts);
-    setCoins(newLvl.coins);
-    setPowerUps(newLvl.powerUps);
-    setPortal(newLvl.portal);
-    setPlayer({
-      x: newLvl.playerStart.x,
-      y: newLvl.playerStart.y,
-      radius: 9,
-      speed: 2.6,
-      baseSpeed: 2.6,
-      facing: 'RIGHT',
-      moving: false,
-      activeEffects: {
-        speedBoostRemaining: 0,
-        freezeRemaining: 0,
-        hasShield: false,
-        magnetRemaining: 0,
-      },
+    setLevelKey((k) => k + 1);
+    setPortalActive(false);
+    setCoinsRemaining(newLvl.coins.length);
+    setActiveEffects({
+      speedBoostRemaining: 0,
+      freezeRemaining: 0,
+      hasShield: false,
+      magnetRemaining: 0,
     });
+    setInputDirection({ x: 0, y: 0 });
+    activeKeysRef.current = {};
     initialCoinsCountRef.current = newLvl.coins.length;
     levelStartTimeRef.current = Date.now();
     setLevelStats(null);
     setGameState('PLAYING');
-  };
+  }, [level, difficulty]);
 
-  // Restart current run
-  const handleRestartGame = () => {
-    handleStartGame();
-  };
+  // Retry the current level
+  const handleRetryLevel = useCallback(() => {
+    sound.enableAudioOnGesture();
+    const freshLvl = generateLevel(level, difficulty);
+    setLevelData(freshLvl);
+    setLevelKey((k) => k + 1);
+    setPortalActive(false);
+    setCoinsRemaining(freshLvl.coins.length);
+    setActiveEffects({
+      speedBoostRemaining: 0,
+      freezeRemaining: 0,
+      hasShield: false,
+      magnetRemaining: 0,
+    });
+    setInputDirection({ x: 0, y: 0 });
+    activeKeysRef.current = {};
+    levelStartTimeRef.current = Date.now();
+    setGameState('PLAYING');
+  }, [level, difficulty]);
 
   // Toggle pause
-  const handleTogglePause = () => {
-    if (gameState === 'PLAYING') {
-      sound.playButtonBeep();
-      setGameState('PAUSED');
-    } else if (gameState === 'PAUSED') {
-      sound.playButtonBeep();
-      setGameState('PLAYING');
-    }
-  };
+  const handleTogglePause = useCallback(() => {
+    setGameState((prev) => {
+      if (prev === 'PLAYING') {
+        sound.playButtonBeep();
+        return 'PAUSED';
+      }
+      if (prev === 'PAUSED') {
+        sound.playButtonBeep();
+        return 'PLAYING';
+      }
+      return prev;
+    });
+  }, []);
 
-  // Coin collected
-  const handleCoinCollected = (coin: Coin) => {
+  // Stable event handlers for ArcadeScreen
+  const handleCoinCollected = useCallback((coin: { value: number; isSuper: boolean }, remainingCount: number) => {
     if (coin.isSuper) {
       sound.playSuperCoinSound();
     } else {
       sound.playCoinSound();
     }
+    setCoinsRemaining(remainingCount);
     setScore((prev) => {
       const next = prev + coin.value;
-      if (next > highScore) setHighScore(next);
+      if (next > highScore) {
+        setHighScore(next);
+        try {
+          localStorage.setItem(HIGH_SCORE_KEY, next.toString());
+        } catch {}
+      }
       return next;
     });
-  };
+  }, [highScore]);
 
-  // Power-up picked up
-  const handlePowerUpCollected = (pw: PowerUp) => {
-    setPlayer((prev) => {
-      const effects = { ...prev.activeEffects };
-      if (pw.type === 'SPEED') effects.speedBoostRemaining = 6000;
-      if (pw.type === 'FREEZE') {
-        effects.freezeRemaining = 5000;
-        sound.playFreezeSound();
+  const handlePowerUpCollected = useCallback(() => {
+    setScore((prev) => {
+      const next = prev + 50;
+      if (next > highScore) {
+        setHighScore(next);
+        try {
+          localStorage.setItem(HIGH_SCORE_KEY, next.toString());
+        } catch {}
       }
-      if (pw.type === 'SHIELD') effects.hasShield = true;
-      if (pw.type === 'MAGNET') effects.magnetRemaining = 7000;
-      return { ...prev, activeEffects: effects };
+      return next;
     });
-    setScore((prev) => prev + 50);
-  };
+  }, [highScore]);
 
-  // All coins cleared
-  const handleCoinsDepleted = () => {
-    setPortal((prev) => ({ ...prev, active: true }));
-  };
+  const handleCoinsDepleted = useCallback(() => {
+    setPortalActive(true);
+  }, []);
 
-  // Portal reached (Level Victory)
-  const handlePortalReached = () => {
+  const handlePortalReached = useCallback(() => {
     const timeTakenSec = Math.max(1, (Date.now() - levelStartTimeRef.current) / 1000);
     const speedBonus = Math.max(0, Math.floor((50 - timeTakenSec) * 15));
     const livesBonus = lives * 75;
@@ -291,50 +314,56 @@ export default function App() {
     setScore(finalLevelScore);
     if (finalLevelScore > highScore) {
       setHighScore(finalLevelScore);
+      try {
+        localStorage.setItem(HIGH_SCORE_KEY, finalLevelScore.toString());
+      } catch {}
     }
     setGameState('LEVELCLEAR');
-  };
+  }, [level, lives, score, highScore]);
 
-  // Player hit by ghost
-  const handlePlayerHit = () => {
-    const remainingLives = lives - 1;
-    setLives(remainingLives);
+  const handlePlayerHit = useCallback(() => {
+    setLives((prev) => {
+      const remainingLives = prev - 1;
+      if (remainingLives <= 0) {
+        sound.playGameOverSound();
+        saveRecord(score, level);
+        setGameState('GAMEOVER');
+        return 0;
+      }
+      return remainingLives;
+    });
+  }, [level, score, saveRecord]);
 
-    if (remainingLives <= 0) {
-      sound.playGameOverSound();
-      saveRecord(score, level);
-      setGameState('GAMEOVER');
-    } else {
-      // Safely respawn player at starting point
-      setPlayer((prev) => ({
-        ...prev,
-        x: levelData.playerStart.x,
-        y: levelData.playerStart.y,
-        activeEffects: {
-          ...prev.activeEffects,
-          speedBoostRemaining: 0,
-          hasShield: false,
-        },
-      }));
-    }
-  };
+  const handleEffectsUpdated = useCallback((effects: Player['activeEffects']) => {
+    setActiveEffects(effects);
+  }, []);
+
+  const handleCoinsCountUpdated = useCallback((count: number) => {
+    setCoinsRemaining(count);
+  }, []);
+
+  // Window blur listener to prevent stuck keyboard keys
+  useEffect(() => {
+    const handleBlur = () => {
+      activeKeysRef.current = {};
+      setInputDirection({ x: 0, y: 0 });
+    };
+    window.addEventListener('blur', handleBlur);
+    return () => window.removeEventListener('blur', handleBlur);
+  }, []);
 
   // Keyboard navigation listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent browser scroll on arrow keys and space
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
         e.preventDefault();
       }
 
-      // Pause toggle
       if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
-        if (gameState === 'PLAYING') setGameState('PAUSED');
-        else if (gameState === 'PAUSED') setGameState('PLAYING');
+        handleTogglePause();
         return;
       }
 
-      // Enter/Space on overlays
       if (e.key === 'Enter' || e.key === ' ') {
         if (gameState === 'START' || gameState === 'GAMEOVER') {
           handleStartGame();
@@ -377,16 +406,16 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [gameState, level, difficulty]);
+  }, [gameState, handleStartGame, handleNextLevel, handleTogglePause]);
 
   return (
-    <div className="min-h-screen bg-[#0b0c10] text-[#e0e2ec] flex flex-col items-center justify-between px-3 py-4 selection:bg-[#00ffcc] selection:text-[#0b0c10]">
+    <div className="min-h-screen bg-[#0b0c10] text-[#e0e2ec] flex flex-col items-center justify-between px-3 py-3 selection:bg-[#00ffcc] selection:text-[#0b0c10]">
       {/* Top Bar Contract (Zone 1: Brand title, Zone 2: Nav links, Zone 3: Primary Action) */}
-      <header className="w-full max-w-5xl flex items-center justify-between pb-3 mb-2 border-b border-slate-800/80">
+      <header className="w-full max-w-5xl flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80">
         {/* Zone 1: Single text wordmark */}
         <div className="flex items-center gap-2">
-          <Gamepad2 className="text-[#00ffcc] w-5 h-5" />
-          <span className="font-pixel text-sm sm:text-base text-white tracking-wider glow-cyan">
+          <Gamepad2 className="text-[#00ffcc] w-5 h-5 shrink-0" />
+          <span className="font-pixel text-sm sm:text-base text-white tracking-wider glow-cyan truncate">
             RETRO MAZE RUNNER
           </span>
         </div>
@@ -418,14 +447,14 @@ export default function App() {
           {gameState === 'PLAYING' ? (
             <button
               onClick={handleTogglePause}
-              className="px-3 py-1.5 rounded-md bg-[#1f2233] hover:bg-[#2d3148] text-xs text-[#00ffcc] font-pixel border border-slate-700 transition-colors whitespace-nowrap"
+              className="px-3 py-1.5 rounded-md bg-[#1f2233] hover:bg-[#2d3148] text-xs text-[#00ffcc] font-pixel border border-slate-700 transition-colors whitespace-nowrap cursor-pointer"
             >
               PAUSE
             </button>
           ) : (
             <button
               onClick={handleStartGame}
-              className="px-3.5 py-1.5 rounded-md bg-[#00ffcc] hover:bg-[#33ffdd] text-[#0a0a0e] text-xs font-pixel font-bold shadow-[0_3px_0_#009977] active:translate-y-0.5 active:shadow-none transition-all whitespace-nowrap"
+              className="px-3.5 py-1.5 rounded-md bg-[#00ffcc] hover:bg-[#33ffdd] text-[#0a0a0e] text-xs font-pixel font-bold shadow-[0_3px_0_#009977] active:translate-y-0.5 active:shadow-none transition-all whitespace-nowrap cursor-pointer"
             >
               PLAY NOW
             </button>
@@ -433,7 +462,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Game Arena Container */}
+      {/* Main Game Container */}
       <main className="w-full flex flex-col items-center justify-center flex-1 my-1">
         {/* Arcade ScoreBoard */}
         <ScoreBoard
@@ -442,12 +471,16 @@ export default function App() {
           level={level}
           lives={lives}
           maxLives={maxLives}
+          coinsRemaining={coinsRemaining}
+          portalActive={portalActive}
           biome={levelData.config.theme}
           difficulty={difficulty}
-          player={player}
+          activeEffects={activeEffects}
           isPaused={gameState === 'PAUSED'}
           soundEnabled={soundEnabled}
           crtEffect={crtEffect}
+          showVirtualControls={showVirtualControls}
+          onToggleVirtualControls={handleToggleVirtualControls}
           onTogglePause={handleTogglePause}
           onToggleSound={handleToggleSound}
           onToggleCRT={handleToggleCRT}
@@ -455,20 +488,21 @@ export default function App() {
           onOpenLeaderboard={() => setShowLeaderboard(true)}
         />
 
-        {/* Screen with Canvas and Interactive Overlays */}
-        <div className="relative">
+        {/* Screen with Canvas and Interactive Overlays inside aligned aspect-square container */}
+        <div className="relative w-full max-w-[476px] aspect-square mx-auto">
           <ArcadeScreen
+            levelKey={levelKey}
             grid={levelData.config.grid}
             rows={levelData.config.rows}
             cols={levelData.config.cols}
             tileSize={levelData.config.tileSize}
             theme={levelData.config.theme}
             difficulty={difficulty}
-            player={player}
-            ghosts={ghosts}
-            coins={coins}
-            powerUps={powerUps}
-            portal={portal}
+            playerStart={levelData.playerStart}
+            initialGhosts={levelData.ghosts}
+            initialCoins={levelData.coins}
+            initialPowerUps={levelData.powerUps}
+            initialPortal={levelData.portal}
             isPlaying={gameState === 'PLAYING'}
             isPaused={gameState === 'PAUSED'}
             inputDirection={inputDirection}
@@ -477,7 +511,8 @@ export default function App() {
             onPortalReached={handlePortalReached}
             onPlayerHit={handlePlayerHit}
             onCoinsDepleted={handleCoinsDepleted}
-            onUpdatePlayerPos={setPlayer}
+            onEffectsUpdated={handleEffectsUpdated}
+            onCoinsCountUpdated={handleCoinsCountUpdated}
             crtEffect={crtEffect}
           />
 
@@ -492,17 +527,20 @@ export default function App() {
             onStartGame={handleStartGame}
             onResumeGame={() => setGameState('PLAYING')}
             onNextLevel={handleNextLevel}
-            onRestartGame={handleRestartGame}
+            onRestartGame={handleStartGame}
+            onRetryLevel={handleRetryLevel}
             onChangeDifficulty={setDifficulty}
           />
         </div>
 
-        {/* Virtual On-Screen Controls for mobile / touch */}
-        {isTouchDevice && (
-          <VirtualControls
-            onDirectionChange={setInputDirection}
-            disabled={gameState !== 'PLAYING'}
-          />
+        {/* Virtual On-Screen Controls */}
+        {showVirtualControls && (
+          <div className="w-full flex justify-center">
+            <VirtualControls
+              onDirectionChange={setInputDirection}
+              disabled={gameState !== 'PLAYING'}
+            />
+          </div>
         )}
       </main>
 
@@ -513,7 +551,7 @@ export default function App() {
           <span>·</span>
           <span>Pause: <strong className="text-slate-200">P / Esc</strong></span>
           <span>·</span>
-          <span>Goal: <strong className="text-[#00ffcc]">Collect Coins &amp; Enter Portal</strong></span>
+          <span>Goal: <strong className="text-[#00ffcc]">Collect Coins &amp; Escape Portal</strong></span>
         </div>
       </footer>
 

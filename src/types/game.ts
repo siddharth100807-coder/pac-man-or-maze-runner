@@ -58,6 +58,10 @@ export interface Ghost {
   isFrozen: boolean;
   freezeTimer: number;
   eyeOffset: { x: number; y: number };
+  spawnX?: number;
+  spawnY?: number;
+  dirX?: number;
+  dirY?: number;
 }
 
 export interface Portal {

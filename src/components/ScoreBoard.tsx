@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, VolumeX, Tv, Pause, Play, HelpCircle, Trophy, Sparkles } from 'lucide-react';
+import { Volume2, VolumeX, Tv, Pause, Play, HelpCircle, Trophy, Sparkles, Gamepad2 } from 'lucide-react';
 import { BiomeTheme, Difficulty, Player } from '../types/game';
 
 interface ScoreBoardProps {
@@ -8,12 +8,16 @@ interface ScoreBoardProps {
   level: number;
   lives: number;
   maxLives: number;
+  coinsRemaining: number;
+  portalActive: boolean;
   biome: BiomeTheme;
   difficulty: Difficulty;
-  player: Player;
+  activeEffects: Player['activeEffects'];
   isPaused: boolean;
   soundEnabled: boolean;
   crtEffect: boolean;
+  showVirtualControls: boolean;
+  onToggleVirtualControls: () => void;
   onTogglePause: () => void;
   onToggleSound: () => void;
   onToggleCRT: () => void;
@@ -27,19 +31,23 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
   level,
   lives,
   maxLives,
+  coinsRemaining,
+  portalActive,
   biome,
   difficulty,
-  player,
+  activeEffects,
   isPaused,
   soundEnabled,
   crtEffect,
+  showVirtualControls,
+  onToggleVirtualControls,
   onTogglePause,
   onToggleSound,
   onToggleCRT,
   onOpenHelp,
   onOpenLeaderboard,
 }) => {
-  const { speedBoostRemaining, freezeRemaining, hasShield, magnetRemaining } = player.activeEffects;
+  const { speedBoostRemaining, freezeRemaining, hasShield, magnetRemaining } = activeEffects;
 
   const getBiomeLabel = (b: BiomeTheme) => {
     switch (b) {
@@ -58,21 +66,21 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
   };
 
   return (
-    <div className="w-full max-w-[540px] flex flex-col gap-2 mb-2 select-none">
+    <div className="w-full max-w-[476px] flex flex-col gap-2 mb-2 select-none">
       {/* Top Header Row with Score, High Score, and Controls */}
       <div className="flex items-center justify-between bg-[#14151e] border-2 border-[#2b2d3d] px-3 py-2 rounded-lg text-xs">
         {/* Left: Score & High Score */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-pixel">SCORE</div>
-            <div className="text-base font-pixel text-[#00ffcc] glow-cyan tabular-nums tracking-wider">
+            <div className="text-sm sm:text-base font-pixel text-[#00ffcc] glow-cyan tabular-nums tracking-wider">
               {score.toString().padStart(6, '0')}
             </div>
           </div>
 
-          <div className="hidden sm:block border-l border-slate-700 pl-3">
+          <div className="hidden xs:block border-l border-slate-700 pl-2 sm:pl-3">
             <div className="text-[9px] uppercase tracking-wider text-slate-400 font-pixel">HIGH</div>
-            <div className="text-sm font-pixel text-[#ffcc00] tabular-nums tracking-wider">
+            <div className="text-xs sm:text-sm font-pixel text-[#ffcc00] tabular-nums tracking-wider">
               {highScore.toString().padStart(6, '0')}
             </div>
           </div>
@@ -89,6 +97,19 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
 
         {/* Right: Quick Settings Buttons */}
         <div className="flex items-center gap-1">
+          <button
+            onClick={onToggleVirtualControls}
+            title={showVirtualControls ? 'Hide Virtual D-Pad' : 'Show Virtual D-Pad'}
+            aria-label="Toggle Virtual Controls"
+            className={`p-1.5 rounded transition-colors border ${
+              showVirtualControls
+                ? 'bg-[#00ffcc]/20 border-[#00ffcc]/60 text-[#00ffcc]'
+                : 'bg-[#1e202c] border-slate-700/60 text-slate-400 hover:text-white'
+            }`}
+          >
+            <Gamepad2 size={15} />
+          </button>
+
           <button
             onClick={onToggleSound}
             title={soundEnabled ? 'Mute Sound' : 'Enable Sound'}
@@ -140,7 +161,7 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
         </div>
       </div>
 
-      {/* Secondary Bar: Lives & Active Power-Ups */}
+      {/* Secondary Bar: Lives & Active Power-Ups / Objectives */}
       <div className="flex items-center justify-between px-2 text-xs">
         {/* Lives (Pixel Hearts) */}
         <div className="flex items-center gap-1.5">
@@ -159,7 +180,7 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
           </div>
         </div>
 
-        {/* Active Power-Up Badges */}
+        {/* Active Power-Up Badges or Objective indicator */}
         <div className="flex items-center gap-2">
           {hasShield && (
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-950/80 border border-blue-500/50 text-[9px] font-pixel text-blue-300 animate-pulse">
@@ -181,10 +202,15 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
               <span>🧲</span> MAGNET {(magnetRemaining / 1000).toFixed(1)}s
             </div>
           )}
-          {!hasShield && speedBoostRemaining <= 0 && freezeRemaining <= 0 && magnetRemaining <= 0 && (
-            <div className="text-[9px] text-slate-500 font-pixel flex items-center gap-1">
-              <Sparkles size={11} className="text-slate-600" />
-              <span>COLLECT ALL COINS</span>
+
+          {/* Objective: Coins remaining or Portal Open */}
+          {portalActive ? (
+            <div className="px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-400 text-[9px] font-pixel text-emerald-300 animate-pulse flex items-center gap-1">
+              <span>🌀</span> PORTAL OPEN!
+            </div>
+          ) : (
+            <div className="text-[9px] text-[#ffcc00] font-pixel flex items-center gap-1">
+              <span>🟡</span> {coinsRemaining} LEFT
             </div>
           )}
         </div>
