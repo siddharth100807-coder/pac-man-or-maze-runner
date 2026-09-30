@@ -1,0 +1,6 @@
+{
+  "name": "Retro Maze Runner",
+  "description": "An action-packed retro 8-bit arcade maze runner with procedural labyrinths, chiptune sound effects, cunning ghosts, power-ups, and CRT display mode.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
